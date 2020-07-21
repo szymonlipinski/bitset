@@ -54,7 +54,7 @@ impl BitSet {
         }
     }
 
-    /// Finds the bit position and block number 
+    /// Finds the bit position and block number
     fn get_bit_position(position: usize) -> BitPosition {
         BitPosition {
             block_number: position / Self::block_size(),
@@ -99,8 +99,6 @@ impl BitSet {
 
 // Basic functions
 impl BitSet {
-
-
     /// Gets the bit from the position.
     ///
     /// Panics:
@@ -109,7 +107,7 @@ impl BitSet {
     pub fn get(&self, position: usize) -> bool {
         self.assert_position(position);
 
-        let bit_position  = Self::get_bit_position(position);
+        let bit_position = Self::get_bit_position(position);
         let bitmask = Self::make_bitmask(bit_position.block_position);
 
         self.blocks[bit_position.block_number] & bitmask != 0
@@ -123,13 +121,15 @@ impl BitSet {
     pub fn set(&mut self, position: usize, value: bool) {
         self.assert_position(position);
 
-        let bit_position  = Self::get_bit_position(position);
-        let bitmask =Self::make_bitmask(bit_position.block_position);
+        let bit_position = Self::get_bit_position(position);
+        let bitmask = Self::make_bitmask(bit_position.block_position);
 
         if value == true {
-            self.blocks[bit_position.block_number] = self.blocks[bit_position.block_number] | bitmask;
+            self.blocks[bit_position.block_number] =
+                self.blocks[bit_position.block_number] | bitmask;
         } else {
-            self.blocks[bit_position.block_number] = self.blocks[bit_position.block_number] & !bitmask;
+            self.blocks[bit_position.block_number] =
+                self.blocks[bit_position.block_number] & !bitmask;
         }
     }
 }
