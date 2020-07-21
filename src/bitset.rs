@@ -10,7 +10,12 @@ use std::mem::size_of;
 use std::ops::Add;
 use std::string::ToString;
 
-// type usize = u32;
+/// A simple placeholder for calculating the place where a bit is stored.
+///
+struct BitPosition {
+    block_number: usize,
+    block_position: usize,
+}
 
 pub struct BitSet {
     /// list of blocks with data
@@ -36,6 +41,30 @@ impl BitSet {
     /// Returns the size of one block in bits.
     fn block_size() -> usize {
         size_of::<usize>() * 8
+    }
+
+    /// Panic if the passed position argument is outside the range [0; self.size)
+    fn assert_position(&self, position: usize) {
+        if position >= self.size {
+            panic!(format!(
+                "Bit position [{}] is outside available range: [0, {}]",
+                position,
+                self.size - 1
+            ));
+        }
+    }
+
+    /// Finds the bit position and block number 
+    fn get_bit_position(position: usize) -> BitPosition {
+        BitPosition {
+            block_number: position / Self::block_size(),
+            block_position: position % Self::block_size(),
+        }
+    }
+
+    /// Calculates the bitmask with just the one bit set.
+    fn make_bitmask(position: usize) -> usize {
+        1 << position
     }
 }
 
@@ -70,21 +99,37 @@ impl BitSet {
 
 // Basic functions
 impl BitSet {
+
+
     /// Gets the bit from the position.
     ///
+    /// Panics:
+    ///    - if the position is larger than the max bit number (which is size-1)
+    ///
     pub fn get(&self, position: usize) -> bool {
-        let bitmask: usize = 1 << position;
-        let res: usize = self.blocks[0] & bitmask;
-        res != 0
+        self.assert_position(position);
+
+        let bit_position  = Self::get_bit_position(position);
+        let bitmask = Self::make_bitmask(bit_position.block_position);
+
+        self.blocks[bit_position.block_number] & bitmask != 0
     }
 
+    /// Sets the bit value at the position.Add
+    ///
+    /// Panics:
+    ///    - if the position is larger than the max bit number (which is size-1)
+    ///
     pub fn set(&mut self, position: usize, value: bool) {
-        let block_number = position / Self::block_size();
-        let bitmask: usize = 1 << (position % Self::block_size());
+        self.assert_position(position);
+
+        let bit_position  = Self::get_bit_position(position);
+        let bitmask =Self::make_bitmask(bit_position.block_position);
+
         if value == true {
-            self.blocks[block_number] = self.blocks[block_number] | bitmask;
+            self.blocks[bit_position.block_number] = self.blocks[bit_position.block_number] | bitmask;
         } else {
-            self.blocks[block_number] = self.blocks[block_number] & !bitmask;
+            self.blocks[bit_position.block_number] = self.blocks[bit_position.block_number] & !bitmask;
         }
     }
 }
@@ -219,6 +264,20 @@ mod test_basic_getter_and_setter {
     use super::*;
 
     #[test]
+    #[should_panic(expected = "Bit position [256] is outside available range: [0, 255]")]
+    fn check_using_setter_for_too_large_position() {
+        let mut b = BitSet::new(256);
+        b.set(256, false);
+    }
+
+    #[test]
+    #[should_panic(expected = "Bit position [256] is outside available range: [0, 255]")]
+    fn check_using_getter_for_too_large_position() {
+        let b = BitSet::new(256);
+        b.get(256);
+    }
+
+    #[test]
     fn check_simple_operations() {
         let mut b = BitSet::new(4);
         assert_eq!(b.get(0), false);
@@ -244,6 +303,15 @@ mod test_basic_getter_and_setter {
         assert_eq!(b.get(1), false);
         assert_eq!(b.get(2), false);
         assert_eq!(b.get(3), false);
-        
+    }
+
+    #[test]
+    fn check_larger_bitsets() {
+        let SIZE = 350;
+        let mut b = BitSet::new(SIZE);
+
+        for n in 0..SIZE {
+            assert_eq!(b.get(n), false);
+        }
     }
 }
