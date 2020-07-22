@@ -1,14 +1,22 @@
+//! There is no From<u8> or any other types.
+//! The problem is that it's possible that the conversion is not doable
+//! and according to the documentation, the From trait cannot fail.
+//!
+//! Use TryFrom<> inst
+
 extern crate num;
 use core::ops::{
     BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Index, IndexMut, Not, Shl,
     ShlAssign, Shr, ShrAssign, Sub, SubAssign,
 };
 use num::traits::Unsigned;
+use std::cmp::max;
 use std::cmp::PartialEq;
 use std::convert::From;
 use std::convert::TryFrom;
 use std::convert::TryInto;
 use std::default::Default;
+use std::fmt;
 use std::mem::size_of;
 use std::ops::Add;
 use std::string::ToString;
@@ -143,6 +151,38 @@ impl BitSet {
     }
 }
 
+// utility functions
+impl BitSet {
+    /// Returns true if all bits are set. False if any is not set.
+    fn all(&self) -> bool {
+        for block in &self.blocks {
+            if *block != usize::MAX {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// Returns true if all none bit is set. False if all are not set.
+    fn any(&self) -> bool {
+        for block in &self.blocks {
+            if *block != 0 {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// Returns number of bits set to true.
+    fn count(&self) -> u32 {
+        let mut res = 0;
+        for block in &self.blocks {
+            res += block.count_ones();
+        }
+        res
+    }
+}
+
 macro_rules! add_from_uint_trait {
     ($t:ty) => {
         impl From<$t> for BitSet {
@@ -202,6 +242,7 @@ add_from_uint_trait! {u16}
 add_from_uint_trait! {u32}
 add_from_uint_trait! {u64}
 add_from_uint_trait! {u128}
+add_from_uint_trait! {usize}
 
 impl ToString for BitSet {
     fn to_string(&self) -> String {
@@ -213,6 +254,53 @@ impl ToString for BitSet {
         res[(res.len() - self.size)..].to_string()
     }
 }
+
+macro_rules! add_try_from_uint_trait {
+    ($t:ty) => {
+        impl TryFrom<BitSet> for $t {
+            type Error = &'static str;
+
+            fn try_from(value: BitSet) -> Result<Self, Self::Error> {
+                let block_size = size_of::<usize>();
+                let output_bytes = size_of::<$t>();
+                let blocks_needed: usize = max(output_bytes / block_size, 1);
+
+                // When the type is smaller than usize
+                if blocks_needed == 1 {
+                    match <$t>::try_from(value.blocks[0]) {
+                        Ok(number) => return Ok(number),
+                        Err(_) => return Err("Value stored in BitSet cannot be converted to u8."),
+                    };
+                }
+
+                // The type is bigger than usize, e.g. u128 on 64bit machine,
+                // this way we need to have at least two blocks, and conversion
+                // should be fine.
+
+                // if any of the not used blocks contains any bit set, then the conversion is not doable
+                for block in &value.blocks[blocks_needed - 1..] {
+                    if *block != 0 {
+                        return Err("Value stored in BitSet cannot be converted to u8.");
+                    }
+                }
+
+                let mut output: $t = 0;
+                for block in &value.blocks[0..blocks_needed - 1] {
+                    output = output << BitSet::block_size();
+                    output = output | (*block) as $t;
+                }
+                return Ok(output);
+            }
+        }
+    };
+}
+
+add_try_from_uint_trait! {u8}
+add_try_from_uint_trait! {u16}
+add_try_from_uint_trait! {u32}
+add_try_from_uint_trait! {u64}
+add_try_from_uint_trait! {u128}
+add_try_from_uint_trait! {usize}
 
 #[cfg(test)]
 mod test_private_functions {
@@ -272,9 +360,11 @@ mod test_constructors {
 }
 
 #[cfg(test)]
+#[macro_use]
 mod test_conversions_to_types {
 
     use super::*;
+
     #[test]
     fn check_string_conversion() {
         let b = BitSet::new(1);
@@ -292,6 +382,89 @@ mod test_conversions_to_types {
         //                      543210987654321098765432109876543210987654321098765432109876543210
         let expected_d = "010000000000000000000000000000000000000000000000000000000000100001";
         assert_eq!(d.to_string(), expected_d);
+    }
+
+    /// Checks conversion from different values
+    macro_rules! check_type_conversion {
+        ($func:ident, $from:ty, $to:ty) => {
+            #[quickcheck]
+            fn $func(value: $from) -> bool {
+                let bitset = BitSet::from(value);
+
+                let new_value = <$to>::try_from(bitset);
+                if value as $from <= <$to>::MAX as $from {
+                    // conversion should be fine
+                    assert_eq!(value as $to, new_value.unwrap());
+                } else {
+                    // in this case the value is too large
+                    assert_eq!(
+                        new_value,
+                        Err("Value stored in BitSet cannot be converted to u8.")
+                    );
+                }
+                true
+            }
+        };
+    }
+
+    check_type_conversion! {check_conversion_from_u8_to_u8, u8, u8}
+    check_type_conversion! {check_conversion_from_u16_to_u8, u16, u8}
+    check_type_conversion! {check_conversion_from_u32_to_u8, u32, u8}
+    check_type_conversion! {check_conversion_from_u64_to_u8, u64, u8}
+    check_type_conversion! {check_conversion_from_u128_to_u8, u128, u8}
+    check_type_conversion! {check_conversion_from_usize_to_u8, usize, u8}
+
+    check_type_conversion! {check_conversion_from_u8_to_u16, u8, u16}
+    check_type_conversion! {check_conversion_from_u16_to_u16, u16, u16}
+    check_type_conversion! {check_conversion_from_u32_to_u16, u32, u16}
+    check_type_conversion! {check_conversion_from_u64_to_u16, u64, u16}
+    check_type_conversion! {check_conversion_from_u128_to_u16, u128, u16}
+    check_type_conversion! {check_conversion_from_usize_to_u16, usize, u16}
+
+    check_type_conversion! {check_conversion_from_u8_to_u32, u8, u32}
+    check_type_conversion! {check_conversion_from_u16_to_u32, u16, u32}
+    check_type_conversion! {check_conversion_from_u32_to_u32, u32, u32}
+    check_type_conversion! {check_conversion_from_u64_to_u32, u64, u32}
+    check_type_conversion! {check_conversion_from_u128_to_u32, u128, u32}
+    check_type_conversion! {check_conversion_from_usize_to_u32, usize, u32}
+
+    check_type_conversion! {check_conversion_from_u8_to_u64, u8, u64}
+    check_type_conversion! {check_conversion_from_u16_to_u64, u16, u64}
+    check_type_conversion! {check_conversion_from_u32_to_u64, u32, u64}
+    check_type_conversion! {check_conversion_from_u64_to_u64, u64, u64}
+    check_type_conversion! {check_conversion_from_u128_to_u64, u128, u64}
+    check_type_conversion! {check_conversion_from_usize_to_u64, usize, u64}
+
+    check_type_conversion! {check_conversion_from_u8_to_u128, u8, u128}
+    check_type_conversion! {check_conversion_from_u16_to_u128, u16, u128}
+    check_type_conversion! {check_conversion_from_u32_to_u128, u32, u128}
+    check_type_conversion! {check_conversion_from_u64_to_u128, u64, u128}
+    check_type_conversion! {check_conversion_from_u128_to_u128, u128, u128}
+    check_type_conversion! {check_conversion_from_usize_to_u128, usize, u128}
+
+    check_type_conversion! {check_conversion_from_u8_to_usize, u8, usize}
+    check_type_conversion! {check_conversion_from_u16_to_usize, u16, usize}
+    check_type_conversion! {check_conversion_from_u32_to_usize, u32, usize}
+    check_type_conversion! {check_conversion_from_u64_to_usize, u64, usize}
+    check_type_conversion! {check_conversion_from_u128_to_usize, u128, usize}
+    check_type_conversion! {check_conversion_from_usize_to_usize, usize, usize}
+
+    #[quickcheck]
+    fn check_conversion_to_sssu8(value: u16) -> bool {
+        let bitset = BitSet::from(value);
+
+        let new_value = u8::try_from(bitset);
+        if value as u16 <= u8::MAX as u16 {
+            // conversion should be fine
+            assert_eq!(value as u8, new_value.unwrap());
+        } else {
+            // in this case the value is too large
+            assert_eq!(
+                new_value,
+                Err("Value stored in BitSet cannot be converted to u8.")
+            );
+        }
+        true
     }
 }
 
@@ -345,12 +518,13 @@ mod test_conversions_from_types {
         assert_eq!(b.to_string(), "10101010");
     }
 
-    // Test converting from different values;
+    // // Test converting from different values;
     check_type_conversion! {check_conversion_from_u8, u8}
     check_type_conversion! {check_conversion_from_u16, u16}
     check_type_conversion! {check_conversion_from_u32, u32}
     check_type_conversion! {check_conversion_from_u64, u64}
     check_type_conversion! {check_conversion_from_u128, u128}
+    check_type_conversion! {check_conversion_from_usize, usize}
 }
 
 #[cfg(test)]
@@ -398,14 +572,49 @@ mod test_basic_getter_and_setter {
         assert_eq!(b.get(2), false);
         assert_eq!(b.get(3), false);
     }
+}
+
+#[cfg(test)]
+mod test_utitily_functions {
+
+    use super::*;
 
     #[test]
-    fn check_larger_bitsets() {
-        let SIZE = 350;
-        let mut b = BitSet::new(SIZE);
+    fn check_all_function() {
+        let mut b = BitSet::new(300);
+        assert_eq! {b.all(), false}
+        b.set(10, true);
+        assert_eq! {b.all(), false}
 
-        for n in 0..SIZE {
-            assert_eq!(b.get(n), false);
-        }
+        let mut b = BitSet::from(u128::MAX);
+        assert_eq! {b.all(), true}
+        b.set(10, false);
+        assert_eq! {b.all(), false}
+    }
+
+    #[test]
+    fn check_any_function() {
+        let mut b = BitSet::new(300);
+        assert_eq! {b.any(), false}
+        b.set(10, true);
+        assert_eq! {b.any(), true}
+
+        let mut b = BitSet::from(u128::MAX);
+        assert_eq! {b.any(), true}
+        b.set(10, false);
+        assert_eq! {b.any(), true}
+    }
+
+    #[test]
+    fn check_count_function() {
+        let mut b = BitSet::new(300);
+        assert_eq! {b.count(), 0}
+        b.set(10, true);
+        assert_eq! {b.count(), 1}
+
+        let mut b = BitSet::from(u128::MAX);
+        assert_eq! {b.count(), 128}
+        b.set(10, false);
+        assert_eq! {b.count(), 127}
     }
 }
