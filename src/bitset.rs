@@ -5,11 +5,12 @@ use core::ops::{
 };
 use num::traits::Unsigned;
 use std::cmp::PartialEq;
+use std::convert::From;
+use std::convert::TryFrom;
 use std::default::Default;
 use std::mem::size_of;
 use std::ops::Add;
 use std::string::ToString;
-
 /// A simple placeholder for calculating the place where a bit is stored.
 ///
 struct BitPosition {
@@ -84,6 +85,9 @@ impl BitSet {
     /// For the same reason, this function panics when you would try to create
     /// a BitSet with zero bits. This simiplifies the code in other places.
     ///
+    /// Panics:
+    ///    - when size=0
+    ///
     pub fn new(size: usize) -> Self {
         if size == 0 {
             panic!("Creating BitSet with zero bits is not allowed.");
@@ -136,9 +140,40 @@ impl BitSet {
 
 impl From<u8> for BitSet {
     fn from(value: u8) -> Self {
+        // This implementation is simple. I don't care about the number of blocks here,
+        // as it's impossible to have something smaller than u8.
         Self {
             blocks: vec![usize::from(value)],
             size: size_of::<u8>() * 8,
+        }
+    }
+}
+use std::convert::TryInto;
+impl From<u128> for BitSet {
+    fn from(value: u128) -> Self {
+        // number of bytes we need in memory for the value
+        let required_size = size_of::<u128>();
+        // number of blocks needed for the values
+        let blocks_number = Self::blocks_number(required_size);
+
+        // if we need more blocks, then we need to convert the bits
+        // we store Little Endian in the list of blocks
+        let value_bytes = value.to_le_bytes();
+
+        // now we need to slice the blocks in groups as every block
+        // contains a couple of bytes (depending on the machine)
+        let bytes_per_block = size_of::<usize>();
+
+        let mut blocks: Vec<usize> = Vec::with_capacity(blocks_number);
+
+        for chunk in value_bytes.chunks(bytes_per_block) {
+            let block = usize::from_le_bytes(chunk.try_into().unwrap());
+            blocks.push(block);
+        }
+
+        Self {
+            blocks: blocks,
+            size: size_of::<u128>() * 8,
         }
     }
 }
@@ -228,7 +263,6 @@ mod test_conversions_to_types {
         d.set(0, true);
         d.set(5, true);
         d.set(64, true);
-        println!("d |{}|", d.to_string());
         //                          60        50        40        30        20        10         0
         //                      543210987654321098765432109876543210987654321098765432109876543210
         let expected_d = "010000000000000000000000000000000000000000000000000000000000100001";
@@ -240,9 +274,10 @@ mod test_conversions_to_types {
 mod test_conversions_from_types {
 
     use super::*;
+
     #[test]
     fn check_conversion_from_u8_value() {
-        let b = BitSet::from(0);
+        let b = BitSet::from(0 as u8);
         assert_eq!(b.size, 8);
         assert_eq!(b.blocks.len(), 1);
         assert_eq!(b.to_string(), "00000000");
@@ -256,6 +291,11 @@ mod test_conversions_from_types {
         assert_eq!(b.size, 8);
         assert_eq!(b.blocks.len(), 1);
         assert_eq!(b.to_string(), "10101010");
+    }
+
+    #[test]
+    fn check_conversion_from_u32_value() {
+        let b = BitSet::from(((79 as u128) << 110) + 12 as u128);
     }
 }
 
