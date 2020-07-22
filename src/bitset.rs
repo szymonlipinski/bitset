@@ -138,6 +138,38 @@ impl BitSet {
     }
 }
 
+macro_rules! add_from_trait {
+    impl From<$t:ty> for BitSet {
+        fn from(value: u128) -> Self {
+            // number of bytes we need in memory for the value
+            let required_size = size_of::<u128>();
+            // number of blocks needed for the values
+            let blocks_number = Self::blocks_number(required_size);
+    
+            // if we need more blocks, then we need to convert the bits
+            // we store Little Endian in the list of blocks
+            let value_bytes = value.to_le_bytes();
+    
+            // now we need to slice the blocks in groups as every block
+            // contains a couple of bytes (depending on the machine)
+            let bytes_per_block = size_of::<usize>();
+    
+            let mut blocks: Vec<usize> = Vec::with_capacity(blocks_number);
+    
+            for chunk in value_bytes.chunks(bytes_per_block) {
+                let block = usize::from_le_bytes(chunk.try_into().unwrap());
+                blocks.push(block);
+            }
+    
+            Self {
+                blocks: blocks,
+                size: size_of::<u128>() * 8,
+            }
+        }
+    }
+}
+
+
 impl From<u8> for BitSet {
     fn from(value: u8) -> Self {
         // This implementation is simple. I don't care about the number of blocks here,
@@ -149,6 +181,8 @@ impl From<u8> for BitSet {
     }
 }
 use std::convert::TryInto;
+
+add_from_trait!{u128}
 impl From<u128> for BitSet {
     fn from(value: u128) -> Self {
         // number of bytes we need in memory for the value
