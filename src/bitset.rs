@@ -7,10 +7,15 @@ use num::traits::Unsigned;
 use std::cmp::PartialEq;
 use std::convert::From;
 use std::convert::TryFrom;
+use std::convert::TryInto;
 use std::default::Default;
 use std::mem::size_of;
 use std::ops::Add;
 use std::string::ToString;
+
+#[cfg(test)]
+extern crate quickcheck;
+
 /// A simple placeholder for calculating the place where a bit is stored.
 ///
 struct BitPosition {
@@ -138,37 +143,49 @@ impl BitSet {
     }
 }
 
-macro_rules! add_from_trait {
-    impl From<$t:ty> for BitSet {
-        fn from(value: u128) -> Self {
-            // number of bytes we need in memory for the value
-            let required_size = size_of::<u128>();
-            // number of blocks needed for the values
-            let blocks_number = Self::blocks_number(required_size);
-    
-            // if we need more blocks, then we need to convert the bits
-            // we store Little Endian in the list of blocks
-            let value_bytes = value.to_le_bytes();
-    
-            // now we need to slice the blocks in groups as every block
-            // contains a couple of bytes (depending on the machine)
-            let bytes_per_block = size_of::<usize>();
-    
-            let mut blocks: Vec<usize> = Vec::with_capacity(blocks_number);
-    
-            for chunk in value_bytes.chunks(bytes_per_block) {
-                let block = usize::from_le_bytes(chunk.try_into().unwrap());
-                blocks.push(block);
-            }
-    
-            Self {
-                blocks: blocks,
-                size: size_of::<u128>() * 8,
+macro_rules! add_from_uint_trait {
+    ($t:ty) => {
+        impl From<$t> for BitSet {
+            fn from(value: $t) -> Self {
+                // number of bytes we need in memory for the value
+                let required_size = size_of::<$t>();
+                // number of blocks needed for the values
+                let blocks_number = Self::blocks_number(required_size);
+
+                // now we need to slice the blocks in groups as every block
+                // contains a couple of bytes (depending on the machine)
+                let bytes_per_block = size_of::<usize>();
+
+                // if we need more blocks, then we need to convert the bits
+                // we store Little Endian in the list of blocks
+                let value_bytes = value.to_be_bytes();
+
+                let mut blocks: Vec<usize> = Vec::with_capacity(blocks_number);
+
+                // it is possible that we convert e.g. u16 -> usize(u64)
+                // in this case, there are only 2 bytes and the compiler is not happy about
+                // so, let's add some more bytes
+
+                println! {"value {}", value}
+                for chunk in value_bytes.chunks(bytes_per_block) {
+                    let mut block: usize = 0;
+                    for byte in chunk {
+                        block = block << 8;
+                        block = block | usize::from(*byte);
+                    }
+                    blocks.push(block);
+                }
+
+                blocks.reverse();
+
+                Self {
+                    blocks: blocks,
+                    size: size_of::<$t>() * 8,
+                }
             }
         }
-    }
+    };
 }
-
 
 impl From<u8> for BitSet {
     fn from(value: u8) -> Self {
@@ -180,37 +197,11 @@ impl From<u8> for BitSet {
         }
     }
 }
-use std::convert::TryInto;
 
-add_from_trait!{u128}
-impl From<u128> for BitSet {
-    fn from(value: u128) -> Self {
-        // number of bytes we need in memory for the value
-        let required_size = size_of::<u128>();
-        // number of blocks needed for the values
-        let blocks_number = Self::blocks_number(required_size);
-
-        // if we need more blocks, then we need to convert the bits
-        // we store Little Endian in the list of blocks
-        let value_bytes = value.to_le_bytes();
-
-        // now we need to slice the blocks in groups as every block
-        // contains a couple of bytes (depending on the machine)
-        let bytes_per_block = size_of::<usize>();
-
-        let mut blocks: Vec<usize> = Vec::with_capacity(blocks_number);
-
-        for chunk in value_bytes.chunks(bytes_per_block) {
-            let block = usize::from_le_bytes(chunk.try_into().unwrap());
-            blocks.push(block);
-        }
-
-        Self {
-            blocks: blocks,
-            size: size_of::<u128>() * 8,
-        }
-    }
-}
+add_from_uint_trait! {u16}
+add_from_uint_trait! {u32}
+add_from_uint_trait! {u64}
+add_from_uint_trait! {u128}
 
 impl ToString for BitSet {
     fn to_string(&self) -> String {
@@ -305,9 +296,26 @@ mod test_conversions_to_types {
 }
 
 #[cfg(test)]
+#[macro_use]
 mod test_conversions_from_types {
 
     use super::*;
+
+    /// Checks conversion from different values
+    macro_rules! check_type_conversion {
+        ($func:ident, $t:ty) => {
+            #[quickcheck]
+            fn $func(value: $t) -> bool {
+                let bitset = BitSet::from(value);
+                let value_bits_count = size_of::<$t>() * 8;
+                assert_eq!(bitset.size, value_bits_count);
+                let value_bits = format!("{:0width$b}", value, width = value_bits_count);
+                let bitset_bits = bitset.to_string();
+                assert_eq! {value_bits, bitset_bits}
+                true
+            }
+        };
+    }
 
     #[test]
     fn check_conversion_from_u8_value() {
@@ -327,10 +335,12 @@ mod test_conversions_from_types {
         assert_eq!(b.to_string(), "10101010");
     }
 
-    #[test]
-    fn check_conversion_from_u32_value() {
-        let b = BitSet::from(((79 as u128) << 110) + 12 as u128);
-    }
+    // Test converting from different values;
+    check_type_conversion! {check_conversion_from_u8, u8}
+    check_type_conversion! {check_conversion_from_u16, u16}
+    check_type_conversion! {check_conversion_from_u32, u32}
+    check_type_conversion! {check_conversion_from_u64, u64}
+    check_type_conversion! {check_conversion_from_u128, u128}
 }
 
 #[cfg(test)]
