@@ -308,10 +308,20 @@ mod test_conversions_from_types {
             fn $func(value: $t) -> bool {
                 let bitset = BitSet::from(value);
                 let value_bits_count = size_of::<$t>() * 8;
+
+                // the bitset should have the same number of bits as the initial value
                 assert_eq!(bitset.size, value_bits_count);
+
+                // converting both to a string should give the same result
                 let value_bits = format!("{:0width$b}", value, width = value_bits_count);
                 let bitset_bits = bitset.to_string();
                 assert_eq! {value_bits, bitset_bits}
+
+                // also, check bit by bit that everything is the same
+                for bit in 0..value_bits_count - 1 {
+                    let bit_from_value: bool = (value & (1 << bit) != 0);
+                    assert_eq! {bit_from_value, bitset.get(bit)}
+                }
                 true
             }
         };
