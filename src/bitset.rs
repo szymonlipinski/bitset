@@ -5,32 +5,49 @@
 //! Use TryFrom<> inst
 
 extern crate num;
-use core::ops::{
-    BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Index, IndexMut, Not, Shl,
-    ShlAssign, Shr, ShrAssign, Sub, SubAssign,
-};
-use num::traits::Unsigned;
+use core::ops::{BitAnd, BitAndAssign};
+// use num::traits::Unsigned;
 use std::cmp::max;
 use std::cmp::PartialEq;
 use std::convert::From;
 use std::convert::TryFrom;
-use std::convert::TryInto;
-use std::default::Default;
+// use std::convert::TryInto;
+// use std::default::Default;
 use std::fmt;
+// use std::fmt::Display;
 use std::mem::size_of;
-use std::ops::Add;
+// use std::ops::Add;
 use std::string::ToString;
 
-#[cfg(test)]
-extern crate quickcheck;
+use itertools::{
+    EitherOrBoth::{Both, Left, Right},
+    Itertools,
+};
 
 /// A simple placeholder for calculating the place where a bit is stored.
-///
 struct BitPosition {
     block_number: usize,
     block_position: usize,
 }
 
+#[derive(Debug, PartialEq)] // Allow the use of "{:?}" format specifier
+enum BitSetError {
+    EnlargeError { from: usize, to: usize },
+}
+
+// Allow the use of "{}" format specifier
+impl fmt::Display for BitSetError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            BitSetError::EnlargeError { from, to } => write!(
+                f,
+                "Cannot enlarge the bitset to a smaller size {} -> {}.",
+                from, to
+            ),
+        }
+    }
+}
+#[derive(Debug)]
 pub struct BitSet {
     /// list of blocks with data
     blocks: Vec<usize>,
@@ -181,6 +198,31 @@ impl BitSet {
         }
         res
     }
+
+    /// Enlarges the bitset to the required size.
+    ///
+    /// All the new bits are set to false.
+    ///
+    /// The error is returned when
+    ///
+    fn enlarge(&mut self, new_size: usize) -> Result<(), BitSetError> {
+        if new_size <= self.size {
+            return Err(BitSetError::EnlargeError {
+                from: self.size,
+                to: new_size,
+            });
+        }
+
+        // let's create new blocks, if needed
+        let required_new_blocks = Self::blocks_number(new_size);
+        if required_new_blocks > self.blocks.len() {
+            for _ in 1..required_new_blocks - self.blocks.len() {
+                self.blocks.push(0);
+            }
+        }
+        self.size = new_size;
+        return Ok(());
+    }
 }
 
 macro_rules! add_from_uint_trait {
@@ -244,14 +286,15 @@ add_from_uint_trait! {u64}
 add_from_uint_trait! {u128}
 add_from_uint_trait! {usize}
 
-impl ToString for BitSet {
-    fn to_string(&self) -> String {
+impl fmt::Display for BitSet {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut res = String::with_capacity(Self::block_size() * self.blocks.len());
         let block_size = Self::block_size();
         for block in (&self.blocks).iter().rev() {
             res += &format!("{:0width$b}", block, width = block_size);
         }
-        res[(res.len() - self.size)..].to_string()
+        res = res[(res.len() - self.size)..].to_string();
+        write!(f, "{}", res)
     }
 }
 
@@ -448,24 +491,6 @@ mod test_conversions_to_types {
     check_type_conversion! {check_conversion_from_u64_to_usize, u64, usize}
     check_type_conversion! {check_conversion_from_u128_to_usize, u128, usize}
     check_type_conversion! {check_conversion_from_usize_to_usize, usize, usize}
-
-    #[quickcheck]
-    fn check_conversion_to_sssu8(value: u16) -> bool {
-        let bitset = BitSet::from(value);
-
-        let new_value = u8::try_from(bitset);
-        if value as u16 <= u8::MAX as u16 {
-            // conversion should be fine
-            assert_eq!(value as u8, new_value.unwrap());
-        } else {
-            // in this case the value is too large
-            assert_eq!(
-                new_value,
-                Err("Value stored in BitSet cannot be converted to u8.")
-            );
-        }
-        true
-    }
 }
 
 #[cfg(test)]
@@ -575,6 +600,7 @@ mod test_basic_getter_and_setter {
 }
 
 #[cfg(test)]
+#[macro_use]
 mod test_utitily_functions {
 
     use super::*;
@@ -617,4 +643,272 @@ mod test_utitily_functions {
         b.set(10, false);
         assert_eq! {b.count(), 127}
     }
+
+    /// Checks conversion from different values
+    macro_rules! check_enlarge_function {
+        ($func:ident, $t:ty) => {
+            #[quickcheck]
+            fn $func(value: $t) -> bool {
+                let initial_size = size_of::<$t>() * 8;
+                let new_size = value as usize;
+
+                let mut b = BitSet::from(value);
+                assert_eq!(b.size, initial_size);
+
+                let res: Result<(), BitSetError> = b.enlarge(new_size as usize);
+
+                if new_size <= initial_size {
+                    let expected = BitSetError::EnlargeError {
+                        from: initial_size,
+                        to: new_size,
+                    };
+                    let error = res.err().unwrap();
+                    assert_eq!(expected, error);
+                } else {
+                    assert!(res.is_ok());
+                    assert_eq!(b.size, new_size);
+                    assert_eq!($t::try_from(b).unwrap(), value);
+                }
+                true
+            }
+        };
+    }
+
+    check_enlarge_function! {check_enlarge_function_for_u8, u8}
+    check_enlarge_function! {check_enlarge_function_for_u16, u16}
+    check_enlarge_function! {check_enlarge_function_for_u32, u32}
+    check_enlarge_function! {check_enlarge_function_for_u64, u64}
+    check_enlarge_function! {check_enlarge_function_for_u128, u128}
+    check_enlarge_function! {check_enlarge_function_for_usize, usize}
+}
+
+/// The returned bitset has the size of the larger one.
+/// However, it assumes the smaller has zeros when enlarged
+impl BitAnd for BitSet {
+    type Output = BitSet;
+
+    fn bitand(self, rhs: BitSet) -> Self::Output {
+        let lhs = self;
+
+        let output_size = max(lhs.size, rhs.size);
+
+        let mut blocks: Vec<usize> = vec![];
+
+        for item in lhs.blocks.iter().zip_longest(rhs.blocks.iter()) {
+            match item {
+                Both(l, r) => {
+                    blocks.push(l & r);
+                }
+                Left(_) | Right(_) => blocks.push(0),
+            }
+        }
+        BitSet {
+            blocks,
+            size: output_size,
+        }
+    }
+}
+
+impl BitAnd for &BitSet {
+    type Output = BitSet;
+
+    fn bitand(self, rhs: &BitSet) -> Self::Output {
+        let lhs = self;
+
+        let output_size = max(lhs.size, rhs.size);
+
+        let mut blocks: Vec<usize> = vec![];
+
+        for item in lhs.blocks.iter().zip_longest(rhs.blocks.iter()) {
+            match item {
+                Both(l, r) => {
+                    blocks.push(l & r);
+                }
+                Left(_) | Right(_) => blocks.push(0),
+            }
+        }
+        BitSet {
+            blocks,
+            size: output_size,
+        }
+    }
+}
+
+impl BitAndAssign for BitSet {
+
+    fn bitand_assign(&mut self, rhs: Self) {
+        let lhs = self;
+
+        let output_size = max(lhs.size, rhs.size);
+
+        let mut blocks: Vec<usize> = vec![];
+
+        for item in lhs.blocks.iter().zip_longest(rhs.blocks.iter()) {
+            match item {
+                Both(l, r) => {
+                    blocks.push(l & r);
+                }
+                Left(_) | Right(_) => blocks.push(0),
+            }
+        }
+        lhs.blocks = blocks;
+    }
+
+}
+
+#[cfg(test)]
+#[macro_use]
+mod test_operators {
+    use super::*;
+
+    /// Checks logical and function converting between bitsets of different sizes
+    macro_rules! check_logical_bit_and {
+        ($func:ident, $left:ty, $right:ty) => {
+            #[quickcheck]
+            fn $func(left: $left, right: $right) -> bool {
+                let left_size = size_of::<$left>() * 8;
+                let right_size = size_of::<$right>() * 8;
+
+                let a = BitSet::from(left);
+                let b = BitSet::from(right);
+                let c = a & b;
+                assert_eq!(c.size, max(left_size, right_size));
+                assert_eq!(
+                    u128::try_from(c).unwrap(),
+                    u128::from(left as u128 & right as u128)
+                );
+                true
+            }
+        };
+    }
+
+    /// Checks logical and function converting between bitsets of different sizes
+    macro_rules! check_logical_bit_and_for_refs {
+        ($func:ident, $left:ty, $right:ty) => {
+            #[quickcheck]
+            fn $func(left: $left, right: $right) -> bool {
+                let left_size = size_of::<$left>() * 8;
+                let right_size = size_of::<$right>() * 8;
+
+                let a = BitSet::from(left);
+                let b = BitSet::from(right);
+                let c = &a & &b;
+                assert_eq!(c.size, max(left_size, right_size));
+                assert_eq!(
+                    u128::try_from(c).unwrap(),
+                    u128::from(left as u128 & right as u128)
+                );
+                true
+            }
+        };
+    }
+
+    check_logical_bit_and!(check_logical_bit_and_u8_u8, u8, u8);
+    check_logical_bit_and!(check_logical_bit_and_u8_u16, u8, u16);
+    check_logical_bit_and!(check_logical_bit_and_u8_u32, u8, u32);
+    check_logical_bit_and!(check_logical_bit_and_u8_u64, u8, u64);
+    check_logical_bit_and!(check_logical_bit_and_u8_u128, u8, u128);
+    check_logical_bit_and!(check_logical_bit_and_u8_usize, u8, usize);
+
+    check_logical_bit_and!(check_logical_bit_and_u16_u8,    u16, u8);
+    check_logical_bit_and!(check_logical_bit_and_u16_u16,   u16, u16);
+    check_logical_bit_and!(check_logical_bit_and_u16_u32,   u16, u32);
+    check_logical_bit_and!(check_logical_bit_and_u16_u64,   u16, u64);
+    check_logical_bit_and!(check_logical_bit_and_u16_u128,  u16, u128);
+    check_logical_bit_and!(check_logical_bit_and_u16_usize, u16, usize);
+
+    check_logical_bit_and!(check_logical_bit_and_u32_u8,    u32, u8);
+    check_logical_bit_and!(check_logical_bit_and_u32_u16,   u32, u16);
+    check_logical_bit_and!(check_logical_bit_and_u32_u32,   u32, u32);
+    check_logical_bit_and!(check_logical_bit_and_u32_u64,   u32, u64);
+    check_logical_bit_and!(check_logical_bit_and_u32_u128,  u32, u128);
+    check_logical_bit_and!(check_logical_bit_and_u32_usize, u32, usize);
+
+    check_logical_bit_and!(check_logical_bit_and_u64_u8,    u64, u8);
+    check_logical_bit_and!(check_logical_bit_and_u64_u16,   u64, u16);
+    check_logical_bit_and!(check_logical_bit_and_u64_u32,   u64, u32);
+    check_logical_bit_and!(check_logical_bit_and_u64_u64,   u64, u64);
+    check_logical_bit_and!(check_logical_bit_and_u64_u128,  u64, u128);
+    check_logical_bit_and!(check_logical_bit_and_u64_usize, u64, usize);
+
+    check_logical_bit_and!(check_logical_bit_and_u128_u8,    u128, u8);
+    check_logical_bit_and!(check_logical_bit_and_u128_u16,   u128, u16);
+    check_logical_bit_and!(check_logical_bit_and_u128_u32,   u128, u32);
+    check_logical_bit_and!(check_logical_bit_and_u128_u64,   u128, u64);
+    check_logical_bit_and!(check_logical_bit_and_u128_u128,  u128, u128);
+    check_logical_bit_and!(check_logical_bit_and_u128_usize, u128, usize);
+
+    check_logical_bit_and!(check_logical_bit_and_usize_u8,    usize, u8);
+    check_logical_bit_and!(check_logical_bit_and_usize_u16,   usize, u16);
+    check_logical_bit_and!(check_logical_bit_and_usize_u32,   usize, u32);
+    check_logical_bit_and!(check_logical_bit_and_usize_u64,   usize, u64);
+    check_logical_bit_and!(check_logical_bit_and_usize_u128,  usize, u128);
+    check_logical_bit_and!(check_logical_bit_and_usize_usize, usize, usize);
+
+
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_u8_u8, u8, u8);
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_u8_u16, u8, u16);
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_u8_u32, u8, u32);
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_u8_u64, u8, u64);
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_u8_u128, u8, u128);
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_u8_usize, u8, usize);
+
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_u16_u8,    u16, u8);
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_u16_u16,   u16, u16);
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_u16_u32,   u16, u32);
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_u16_u64,   u16, u64);
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_u16_u128,  u16, u128);
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_u16_usize, u16, usize);
+
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_u32_u8,    u32, u8);
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_u32_u16,   u32, u16);
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_u32_u32,   u32, u32);
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_u32_u64,   u32, u64);
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_u32_u128,  u32, u128);
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_u32_usize, u32, usize);
+
+check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_u64_u8,    u64, u8);
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_u64_u16,   u64, u16);
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_u64_u32,   u64, u32);
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_u64_u64,   u64, u64);
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_u64_u128,  u64, u128);
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_u64_usize, u64, usize);
+
+check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_u128_u8,    u128, u8);
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_u128_u16,   u128, u16);
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_u128_u32,   u128, u32);
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_u128_u64,   u128, u64);
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_u128_u128,  u128, u128);
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_u128_usize, u128, usize);
+
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_usize_u8,    usize, u8);
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_usize_u16,   usize, u16);
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_usize_u32,   usize, u32);
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_usize_u64,   usize, u64);
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_usize_u128,  usize, u128);
+    check_logical_bit_and_for_refs!(check_logical_bit_and_for_refs_usize_usize, usize, usize);
+
+    // Checks =& function converting between bitsets of different sizes
+    // macro_rules! check_bit_and_assign {
+    //     ($func:ident, $left:ty, $right:ty) => {
+    //         #[quickcheck]
+    //         fn $func(left: $left, right: $right) -> bool {
+    //             let left_size = size_of::<$left>() * 8;
+    //             let right_size = size_of::<$right>() * 8;
+
+    //             let mut a = BitSet::from(left);
+    //             let b = BitSet::from(right);
+    //             let a &= b;
+    //             assert_eq!(a.size, max(left_size, right_size));
+    //             assert_eq!(
+    //                 u128::try_from(a).unwrap(),
+    //                 u128::from(left as u128 & right as u128)
+    //             );
+    //             true
+    //         }
+    //     };
+    // }
+
+    // check_bit_and_assign!(check_logical_bit_and_assign_u8_u8, u8, u8);
+
 }
