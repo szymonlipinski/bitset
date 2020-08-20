@@ -21,9 +21,7 @@ There are two versions of each function checked: inlined and not inlined.
 
 The full results are at report/Bits/report/index.html.
 
-https://github.com/szymonlipinski/bitset/blob/master/benches/report/Bits/report/violin.svg
-
-![](blob/master/benches/report/Bits/report/violin.svg)
+![](https://github.com/szymonlipinski/bitset/blob/master/benches/report/Bits/report/violin.svg)
 
 The interesting parts are:
 
